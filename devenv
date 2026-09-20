@@ -17,6 +17,12 @@ set -eu
 
 if getent group "$DEVENV_HOST_GID" >/dev/null 2>&1; then
     container_group="$(getent group "$DEVENV_HOST_GID" | cut -d: -f1)"
+    # 镜像内已有同一 GID（常见为 ubuntu:ubuntu）时，改用宿主组名。
+    if [ "$container_group" != "$DEVENV_HOST_GROUP" ] && \
+        ! getent group "$DEVENV_HOST_GROUP" >/dev/null 2>&1; then
+        groupmod --new-name "$DEVENV_HOST_GROUP" "$container_group"
+        container_group="$DEVENV_HOST_GROUP"
+    fi
 else
     groupadd --gid "$DEVENV_HOST_GID" "$DEVENV_HOST_GROUP"
     container_group="$DEVENV_HOST_GROUP"
@@ -24,19 +30,24 @@ fi
 
 if getent passwd "$DEVENV_HOST_UID" >/dev/null 2>&1; then
     container_user="$(getent passwd "$DEVENV_HOST_UID" | cut -d: -f1)"
+    # 镜像内已有同一 UID 时，改用宿主用户名，而不是继续使用 ubuntu 等默认账号。
+    if [ "$container_user" != "$DEVENV_HOST_USER" ] && \
+        ! getent passwd "$DEVENV_HOST_USER" >/dev/null 2>&1; then
+        usermod --login "$DEVENV_HOST_USER" "$container_user"
+        container_user="$DEVENV_HOST_USER"
+    fi
 else
     useradd --uid "$DEVENV_HOST_UID" --gid "$container_group" \
         --create-home --shell /bin/bash "$DEVENV_HOST_USER"
     container_user="$DEVENV_HOST_USER"
 fi
 
-if [ -z "${DEVENV_WORKDIR:-}" ]; then
-    DEVENV_WORKDIR="$(getent passwd "$container_user" | cut -d: -f6)"
+if [ -n "${DEVENV_WORKDIR:-}" ]; then
+    cd "$DEVENV_WORKDIR"
 fi
 
-workdir_shell_escaped="$(printf '%q' "$DEVENV_WORKDIR")"
-exec su --shell /bin/bash "$container_user" \
-    --command "cd $workdir_shell_escaped && exec bash -i"
+# 不使用 `su -c "bash -i"`，以保留 Docker 分配的控制终端和作业控制能力。
+exec su --shell /bin/bash "$container_user"
 '
 
 # 帮助信息
