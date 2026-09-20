@@ -42,6 +42,12 @@ else
     container_user="$DEVENV_HOST_USER"
 fi
 
+# sudo 已由启动前的镜像准备步骤安装；当前用户可用它获得 root shell。
+install -d -m 0750 /etc/sudoers.d
+printf "%s ALL=(ALL) NOPASSWD: ALL\\n" "$container_user" \
+    > "/etc/sudoers.d/devenv-$container_user"
+chmod 0440 "/etc/sudoers.d/devenv-$container_user"
+
 if [ -n "${DEVENV_WORKDIR:-}" ]; then
     cd "$DEVENV_WORKDIR"
 fi
@@ -105,6 +111,27 @@ run_as_host_user() {
         --env "DEVENV_HOST_UID=$HOST_UID" \
         --env "DEVENV_HOST_GID=$HOST_GID" \
         "$img" bash -c "$CONTAINER_USER_BOOTSTRAP"
+}
+
+# sudo 需要以镜像层的形式保存；首次使用某个旧环境时会自动完成这一步。
+ensure_sudo() {
+    local img="$1"
+    local setup_container="devenv-sudo-setup-$$"
+
+    if docker run --rm --entrypoint /bin/sh "$img" -c 'command -v sudo >/dev/null 2>&1'; then
+        return 0
+    fi
+
+    echo "提示: 正在为环境安装 sudo（仅首次执行）..."
+    if ! docker run --name "$setup_container" "$img" bash -c \
+        'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y sudo'; then
+        docker rm "$setup_container" >/dev/null 2>&1 || true
+        echo "错误: 无法为环境安装 sudo。" >&2
+        return 1
+    fi
+
+    docker commit "$setup_container" "$img" >/dev/null
+    docker rm "$setup_container" >/dev/null
 }
 
 # 辅助函数：创建新环境
@@ -189,6 +216,8 @@ case "$ACTION" in
         fi
 
         IMG=$(get_image_name "$ENV_NAME")
+
+        ensure_sudo "$IMG" || exit 1
         
         # 默认挂载当前目录并自动清除容器，透传后续参数 "$@"
         run_as_host_user "$IMG" --rm -it \
