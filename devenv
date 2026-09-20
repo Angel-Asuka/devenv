@@ -34,8 +34,9 @@ if [ -z "${DEVENV_WORKDIR:-}" ]; then
     DEVENV_WORKDIR="$(getent passwd "$container_user" | cut -d: -f6)"
 fi
 
+workdir_shell_escaped="$(printf '%q' "$DEVENV_WORKDIR")"
 exec su --shell /bin/bash "$container_user" \
-    --command "cd \"\$DEVENV_WORKDIR\" && exec bash -i"
+    --command "cd $workdir_shell_escaped && exec bash -i"
 '
 
 # 帮助信息
@@ -182,6 +183,7 @@ case "$ACTION" in
         run_as_host_user "$IMG" --rm -it \
             -v "$(pwd)":"$(pwd)" \
             -w "$(pwd)" \
+            --env "DEVENV_WORKDIR=$(pwd)" \
             --net host \
             "$@"
         ;;
