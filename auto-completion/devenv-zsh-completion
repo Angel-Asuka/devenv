@@ -1,0 +1,47 @@
+#compdef devenv
+
+_devenv_existing_envs() {
+    local -a envs
+    envs=($(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^devenv:' | cut -d':' -f2 | sort -u))
+    _describe -t envs 'devenv 环境名' envs
+}
+
+_devenv() {
+    local context state state_descr line
+    typeset -A opt_args
+
+    _arguments -C \
+        '1: :->command' \
+        '2: :->argument' \
+        '*:: :->args'
+
+    case $state in
+        command)
+            local -a subcommands
+            subcommands=(
+                'ls:列出所有现有的开发环境'
+                'create:基于 ubuntu:26.04 创建新环境'
+                'rm:删除指定的开发环境'
+                'run:运行指定环境（用完即弃）'
+                'maint:进入维护模式（退出自动保存）'
+            )
+            _describe -t subcommands 'devenv 子命令' subcommands
+            ;;
+        argument)
+            case $words[2] in
+                rm|run|maint)
+                    _devenv_existing_envs
+                    ;;
+                create)
+                    _message "输入新的环境名"
+                    ;;
+            esac
+            ;;
+        args)
+            # 透传给 docker run 的后续参数使用常规文件或命令行补全
+            _default
+            ;;
+    esac
+}
+
+_devenv "$@"

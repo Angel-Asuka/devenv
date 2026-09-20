@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+# 检查参数
+if [ $# -lt 1 ]; then
+    echo "用法: dev <环境名> [docker run 参数...]" >&2
+    echo "提示: 这是 'devenv run ...' 的快捷命令" >&2
+    exit 1
+fi
+
+# 检查 devenv 可执行文件是否存在
+if ! command -v devenv >/dev/null 2>&1; then
+    echo "错误: 未找到 'devenv' 命令，请确保 devenv 已安装并位于 PATH 中。" >&2
+    exit 1
+fi
+
+# 将所有参数透传给 devenv run
+exec devenv run "$@"

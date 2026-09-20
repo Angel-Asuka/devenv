@@ -1,0 +1,42 @@
+_devenv_completion() {
+    local cur prev subcmds env_names
+
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    # 支持的子命令列表
+    subcmds="ls create rm run maint"
+
+    # 动态获取已存在的 devenv 环境列表
+    get_devenv_names() {
+        docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | \
+        grep '^devenv:' | \
+        cut -d':' -f2 | \
+        sort -u
+    }
+
+    # 如果补全的是第一个参数，补全子命令
+    if [ "$COMP_CWORD" -eq 1 ]; then
+        COMPREPLY=( $(compgen -W "$subcmds" -- "$cur") )
+        return 0
+    fi
+
+    # 如果前面是需要指定环境名的子命令，补全已有的环境名
+    case "$prev" in
+        rm|run|maint)
+            env_names=$(get_devenv_names)
+            COMPREPLY=( $(compgen -W "$env_names" -- "$cur") )
+            return 0
+            ;;
+        create)
+            # create 命令不需要补全已存在的环境名，保持默认文件或无补全
+            return 0
+            ;;
+        *)
+            ;;
+    esac
+}
+
+# 为 devenv 命令绑定补全函数
+complete -F _devenv_completion devenv

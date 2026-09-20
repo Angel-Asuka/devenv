@@ -1,0 +1,18 @@
+_dev_completion() {
+    local cur env_names
+
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+
+    # 获取已存在的 devenv 环境列表
+    env_names=$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep '^devenv:' | cut -d':' -f2 | sort -u)
+
+    # 第一个参数自动补全已有的环境名
+    if [ "$COMP_CWORD" -eq 1 ]; then
+        COMPREPLY=( $(compgen -W "$env_names" -- "$cur") )
+        return 0
+    fi
+}
+
+# 绑定补全到 dev 命令
+complete -F _dev_completion dev

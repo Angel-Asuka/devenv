@@ -1,0 +1,2 @@
+# 如果在 ~/.zshrc 中定义了 compdef 关联：
+compdef '_devenv_existing_envs' dev

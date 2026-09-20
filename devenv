@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+
+# 遇到未定义变量报错退出
+set -u
+
+BASE_IMAGE="ubuntu:26.04"
+IMAGE_REPO="devenv"
+
+# 帮助信息
+usage() {
+    cat <<EOF
+用法: devenv {ls|create|rm|run|maint} [环境名] ...
+
+命令说明:
+  ls                     列出当前拥有的所有开发环境名称
+  create <环境名>        基于 $BASE_IMAGE 创建一个新的开发环境
+  rm <环境名>            删除指定的开发环境及其关联镜像
+  run <环境名> [args...] 启动运行指定环境，后续参数透传给 docker run
+  maint <环境名>         进入维护模式（退出后自动将变更保存至镜像）
+
+说明:
+  - 镜像命名规则为: ${IMAGE_REPO}:<环境名>
+  - 环境名只能包含小写字母、数字、下划线(_)、中划线(-)和点(.)
+  - run 与 maint 命令在指定的 [环境名] 不存在时会自动创建它
+EOF
+    exit 1
+}
+
+# 校验环境名合法性
+validate_env_name() {
+    local env_name="$1"
+    # Docker tag 命名规范正则表达式校验
+    if ! [[ "$env_name" =~ ^[a-z0-9_][a-z0-9_.-]{0,127}$ ]]; then
+        echo "错误: 环境名 '$env_name' 不合法！" >&2
+        echo "环境名只能包含小写字母、数字、下划线(_)、中划线(-)或点(.)，且不能以中划线或点开头。" >&2
+        return 1
+    fi
+}
+
+# 辅助函数：获取镜像全名 (devenv:环境名)
+get_image_name() {
+    echo "${IMAGE_REPO}:$1"
+}
+
+# 辅助函数：检查环境（镜像）是否存在
+image_exists() {
+    local img
+    img=$(get_image_name "$1")
+    docker image inspect "$img" >/dev/null 2>&1
+}
+
+# 辅助函数：创建新环境
+do_create() {
+    local env_name="$1"
+    local img
+    img=$(get_image_name "$env_name")
+
+    if image_exists "$env_name"; then
+        echo "错误: 环境 '$env_name' (镜像 $img) 已存在！" >&2
+        return 1
+    fi
+
+    echo "=== 正在基于 $BASE_IMAGE 创建新环境 '$env_name' ==="
+    # 尝试拉取 base 镜像（如果不存在）
+    docker image inspect "$BASE_IMAGE" >/dev/null 2>&1 || docker pull "$BASE_IMAGE"
+
+    # 基于 base 镜像创建一个对应的 Tag
+    docker tag "$BASE_IMAGE" "$img"
+    echo "=== 环境 '$env_name' 创建成功 ($img)！ ==="
+}
+
+# 检查参数个数
+if [ $# -lt 1 ]; then
+    usage
+fi
+
+ACTION="$1"
+shift
+
+case "$ACTION" in
+    ls)
+        # 列出所有 repo 为 devenv 的镜像 Tag（即环境名）
+        docker images --format '{{.Repository}}:{{.Tag}}' | grep "^${IMAGE_REPO}:" | cut -d':' -f2 | sort -u
+        ;;
+
+    create)
+        if [ $# -lt 1 ]; then
+            echo "错误: create 命令需要指定 [环境名]" >&2
+            exit 1
+        fi
+        ENV_NAME="$1"
+        validate_env_name "$ENV_NAME" || exit 1
+
+        if ! do_create "$ENV_NAME"; then
+            exit 1
+        fi
+        ;;
+
+    rm)
+        if [ $# -lt 1 ]; then
+            echo "错误: rm 命令需要指定 [环境名]" >&2
+            exit 1
+        fi
+        ENV_NAME="$1"
+        validate_env_name "$ENV_NAME" || exit 1
+        IMG=$(get_image_name "$ENV_NAME")
+
+        if ! image_exists "$ENV_NAME"; then
+            echo "错误: 环境 '$ENV_NAME' 不存在！" >&2
+            exit 1
+        fi
+
+        echo "=== 正在删除环境 '$ENV_NAME' (镜像 $IMG) ==="
+        docker rmi "$IMG"
+        echo "=== 环境 '$ENV_NAME' 已删除！ ==="
+        ;;
+
+    run)
+        if [ $# -lt 1 ]; then
+            echo "错误: run 命令需要指定 [环境名]" >&2
+            exit 1
+        fi
+        ENV_NAME="$1"
+        validate_env_name "$ENV_NAME" || exit 1
+        shift # 剩余参数全部透传给 docker run
+
+        # 如果环境不存在则自动创建
+        if ! image_exists "$ENV_NAME"; then
+            echo "提示: 环境 '$ENV_NAME' 不存在，正在自动创建..."
+            do_create "$ENV_NAME" || exit 1
+        fi
+
+        IMG=$(get_image_name "$ENV_NAME")
+        
+        # 默认挂载当前目录至 /workspace 并自动清除容器，透传后续参数 "$@"
+        docker run --rm -it \
+            -v "$(pwd)":"$(pwd)" \
+            -w "$(pwd)" \
+            "$@" \
+            "$IMG" bash
+        ;;
+
+    maint)
+        if [ $# -lt 1 ]; then
+            echo "错误: maint 命令需要指定 [环境名]" >&2
+            exit 1
+        fi
+        ENV_NAME="$1"
+        validate_env_name "$ENV_NAME" || exit 1
+
+        # 如果环境不存在则自动创建
+        if ! image_exists "$ENV_NAME"; then
+            echo "提示: 环境 '$ENV_NAME' 不存在，正在自动创建..."
+            do_create "$ENV_NAME" || exit 1
+        fi
+
+        IMG=$(get_image_name "$ENV_NAME")
+        # 清理环境名中的非字母数字字符用于容器名称命名
+        SAFE_ENV_NAME=$(echo "$ENV_NAME" | sed 's/[^a-zA-Z0-9_.-]/_/g')
+        MAINT_CONTAINER_NAME="devenv-maint-${SAFE_ENV_NAME}-$$"
+
+        echo "=== 进入环境 '$ENV_NAME' 的维护模式 ==="
+        echo ">>> 在此模式下安装的软件/修改的文件将在退出后自动保存到镜像 $IMG 中 <<<"
+
+        # 启动具名容器（不加 --rm）
+        docker run -it \
+            --name "$MAINT_CONTAINER_NAME" \
+            "$IMG" bash
+
+        # 容器退出后提交更改
+        echo "=== 正在保存更改到镜像 $IMG ... ==="
+        docker commit "$MAINT_CONTAINER_NAME" "$IMG" >/dev/null
+        
+        # 清理临时维护容器
+        docker rm "$MAINT_CONTAINER_NAME" >/dev/null
+        echo "=== 环境 '$ENV_NAME' 更新并保存成功！ ==="
+        ;;
+
+    *)
+        usage
+        ;;
+esac
